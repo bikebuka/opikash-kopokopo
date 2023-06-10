@@ -6,12 +6,12 @@ if (!defined('ABSPATH')) {
  * @package Opikash Kopokopo Woocommerce
  */
 /*
-Plugin Name: KopoKopo Lipa Na Mpesa
-Plugin URI: https://wordpress.org/plugins/opikash-kopokopo-gateway/
-Description: KopoKopo Lipa Na Mpesa is a woocommerce extension plugin that allows website owners to receive payment via Mpesa Paybill/Till Number. It uses KopoKopo APIs (K2-Connect) to process payments. The plugin has been developed by <a href='https://paytalk.co.ke' target='_blank'>paytalk.co.ke.</a>
-Version: 3.0.5
-Author: Opikash.co.ke
-Author URI: https://opikash.co.ke
+Plugin Name: Opikash KopoKopo Lipa Na Mpesa
+Plugin URI: millerjuma.co.ke
+Description: Opikash KopoKopo Lipa Na Mpesa is a woocommerce extension plugin that allows website owners to receive payment via Mpesa Paybill/Till Number. It uses KopoKopo APIs (K2-Connect) to process payments. The plugin has been developed by <a href='https://opikash.millerjuma.co.ke' target='_blank'>millerjuma.co.ke.</a>
+Version: 1.0.0
+Author: millerjuma.co.ke
+Author URI: https://millerjuma.co.ke
 License: GNU General Public License v3.0
 License URI: http://www.gnu.org/licenses/gpl-3.0.html
 Text Domain: woo-opikash-kopokopo-gateway
@@ -30,7 +30,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
 
                 // Setup our default vars
                 $this->id                 = 'kopokopo';
-                $this->method_title       = __('PayTalk.co.ke(KopoKopo)', 'woocommerce');
+                $this->method_title       = __('Opikash(KopoKopo)', 'woocommerce');
                 $this->method_description = __('Opikash KopoKopo gateway works by adding form fields on the checkout page and then sending the details to Opikash.co.ke for verification and processing. Get API keys from <a href="https://app.kopokopo.com" target="_blank">https://app.kopokopo.com</a>', 'woocommerce');
                 $this->icon               = plugins_url( '/images/logo.png', __FILE__ );
                 $this->has_fields         = true;
@@ -403,11 +403,11 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
 
         }
 
-        function add_init_kopokopo_paytalk_class($methods) {
+        function add_init_kopokopo_opikash_class($methods) {
             $methods[] = 'WC_Opikash_KopoKopo_Gateway';
             return $methods;
         }
-        add_filter('woocommerce_payment_gateways', 'add_init_kopokopo_paytalk_class');
+        add_filter('woocommerce_payment_gateways', 'add_init_kopokopo_opikash_class');
     }
 }else{
     function my_error_notice() {
