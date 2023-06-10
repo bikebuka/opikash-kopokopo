@@ -1,5 +1,5 @@
 === KopoKopo Lipa Na Mpesa ===
-Contributors: abiudeko
+Contributors: Miller Juma
 Tags: Lipa na mpesa, paybill, kopokopo, KopoKopo STK Push, opikash, opikash.co.ke
 Requires at least: 3.7.6
 Tested up to: 6.0
