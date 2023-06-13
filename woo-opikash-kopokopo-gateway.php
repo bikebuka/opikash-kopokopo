@@ -78,7 +78,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                         'type'        => 'checkbox',
                         'label'       => __( 'Enable Production', 'woocommerce' ),
                         'description' => '',
-                        'default'     => 'no',
+                        'default'     => "no",
                     ),
 
                     'stk_push' => array(
@@ -233,14 +233,13 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
              */
             private function generate_access_token()
             {
-                $url =$this->is_production ?  $this->liveurl : $this->sandboxURL;
+                $url =$this->is_production=='yes' ?  $this->liveurl : $this->sandboxURL;
 
                 //remote post
-                $consumer_key = $this->client_id;
-                $consumer_secret = $this->client_secret;
-                //https://sandbox.kopokopo.com/oauth/token?grant_type=client_credentials&client_id=lGbQ5l66pASuvxiiiYD_-89W0ugEsBoiieZNr8yGkyY&client_secret=3tEcZpnSSsX0Oxke_ReAjz23t-ZSb_I4WXMM8RVVXVE
+                $consumer_key = trim($this->client_id);
+                $consumer_secret = trim($this->client_secret);
                 $authorization_url=$url."/oauth/token";
-                //
+                //get access token
                 $data = [
                     'grant_type' => 'client_credentials',
                     'client_id' => $consumer_key,
@@ -264,7 +263,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     $responseData = json_decode($response, true);
                     return $responseData['access_token'];
                 } else {
-                     return 'Error: Failed to generate token. HTTP status code: ' . $info['http_code'];
+                        throw new Exception( __( 'Ops, We could not process your payment request at this time. ERROR CODE '.$info['http_code'], 'woocommerce' ) );
                 }
             }
 
@@ -278,7 +277,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 // who to charge and how much
                 $customer_order = new WC_Order( $order_id );
                 //get order id
-                $environment_url =$this->is_production ?  $this->liveurl : $this->sandboxURL;
+                $environment_url =$this->is_production=='yes' ?  $this->liveurl : $this->sandboxURL;
 
                 $mpesa_phone    = isset($_POST['mpesa_phone']) ? ($_POST['mpesa_phone']) : '';
                 $mpesa_code    = isset($_POST['mpesa_code']) ? ($_POST['mpesa_code']) : '';
@@ -306,6 +305,8 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 ];
                 //get access token
                 $access_token = $this->generate_access_token();
+                // Send this payload to opikash.co.ke for processing
+                //
                 $curl = curl_init();
                 curl_setopt_array($curl, array(
                     CURLOPT_URL => $environment_url."/api/v1/incoming_payments",
@@ -325,8 +326,28 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 // Send this payload to opikash.co.ke for processing
                 error_log(print_r("***********************************Order Details", true));
                 error_log(print_r($response, true));
+                error_log(print_r($info, true));
                 error_log(print_r("Order Details***********************************", true));
                 //
+                if ($info['http_code'] === 201) {
+                    // Payment has been successful
+                    $customer_order->add_order_note( __( 'Opikash.co.ke payment completed.', 'woocommerce' ) );
+
+                    // Mark order as Paid
+                    $customer_order->payment_complete();
+
+                    // Reduce stock levels
+                    $customer_order->reduce_order_stock();
+
+                    // Empty the cart (Very important step)
+                    $woocommerce->cart->empty_cart();
+
+                    // Redirect to thank you page
+                    return array(
+                        'result'   => 'success',
+                        'redirect' => $this->get_return_url( $customer_order ),
+                    );
+                }
                 if ($info['http_code'] === 200) {
                     // Store the transaction ID in the order's postmeta
                     if ( empty( $response['body'] ) )
@@ -350,25 +371,6 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                         throw new Exception( __( 'Please enter a valid phone number.', 'woocommerce' ) );
 
                     // Retrieve the body's resopnse if no errors found
-                    if ( ( $response['body'] == "Success" ) ) {
-                        // Payment has been successful
-                        $customer_order->add_order_note( __( 'Opikash.co.ke payment completed.', 'woocommerce' ) );
-
-                        // Mark order as Paid
-                        $customer_order->payment_complete();
-
-                        // Reduce stock levels
-                        $customer_order->reduce_order_stock();
-
-                        // Empty the cart (Very important step)
-                        $woocommerce->cart->empty_cart();
-
-                        // Redirect to thank you page
-                        return array(
-                            'result'   => 'success',
-                            'redirect' => $this->get_return_url( $customer_order ),
-                        );
-                    }
 
                     if ( ( $response['body'] == "offline") ){
 
