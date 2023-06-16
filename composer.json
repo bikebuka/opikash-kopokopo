@@ -1,0 +1,5 @@
+{
+    "require": {
+        "kopokopo/k2-connect-php": "^1.2"
+    }
+}

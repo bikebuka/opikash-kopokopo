@@ -1,4 +1,8 @@
 <?php
+require 'vendor/autoload.php';
+
+use \Kopokopo\SDK\K2;
+
 if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly
 }
@@ -60,7 +64,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
 
                 // Hooks
                 add_action( 'woocommerce_update_options_payment_gateways_' . $this->id, array( &$this, 'process_admin_options' ) );
-
+                add_action( 'woocommerce_api_verify_payment', array( $this, 'verify_payment' ) );
             }
 
             function init_form_fields() {
@@ -281,126 +285,138 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
 
                 $mpesa_phone    = isset($_POST['mpesa_phone']) ? ($_POST['mpesa_phone']) : '';
                 $mpesa_code    = isset($_POST['mpesa_code']) ? ($_POST['mpesa_code']) : '';
-                //
-                $payload = [
-                    "payment_channel" => "M-PESA STK Push",
-                    "till_number" => $this->paytill,
-                    "subscriber" => [
-                        "first_name" => $customer_order->get_billing_first_name(),
-                        "last_name" => $customer_order->get_billing_last_name(),
-                        "phone_number" => $mpesa_phone,
-                        "email" => $customer_order->get_billing_email()
-                    ],
-                    "amount" => [
-                        "currency" => $customer_order->get_currency(),
-                        "value" => $customer_order->get_total()
-                    ],
-                    "metadata" => [
-                        "something" => "Pay Bill Online",
-                        "something_else" => "Pay online"
-                    ],
-                    "_links" => [
-                        "callback_url" => $this->callback_url,
-                    ]
+
+                $options = [
+                    'clientId' => $this->client_id,
+                    'clientSecret' => $this->client_secret,
+                    'apiKey' => '',
+                    'baseUrl' => $environment_url,
                 ];
-                //get access token
-                $access_token = $this->generate_access_token();
-                // Send this payload to opikash.co.ke for processing
+                $K2 = new K2($options);
                 //
-                $curl = curl_init();
-                curl_setopt_array($curl, array(
-                    CURLOPT_URL => $environment_url."/api/v1/incoming_payments",
-                    CURLOPT_RETURNTRANSFER => true,
-                    CURLOPT_POST => true,
-                    CURLOPT_CUSTOMREQUEST => "POST",
-                    CURLOPT_POSTFIELDS => json_encode($payload),
-                    CURLOPT_HTTPHEADER => array(
-                        "authorization: Bearer ".$access_token,
-                        "content-type: application/json"
-                    ),
-                ));
-                $response = curl_exec($curl);
-                $info = curl_getinfo($curl);
-                curl_close($curl);
+                $stk = $K2->StkService();
 
-                // Send this payload to opikash.co.ke for processing
-                error_log(print_r("***********************************Order Details", true));
-                error_log(print_r($response, true));
-                error_log(print_r($info, true));
-                error_log(print_r("Order Details***********************************", true));
-                //
-                if ($info['http_code'] === 201) {
-                    // Payment has been successful
-                    $customer_order->add_order_note( __( 'Opikash.co.ke payment completed.', 'woocommerce' ) );
-
-                    // Mark order as Paid
-                    $customer_order->payment_complete();
-
-                    // Reduce stock levels
-                    $customer_order->reduce_order_stock();
-
-                    // Empty the cart (Very important step)
-                    $woocommerce->cart->empty_cart();
-
-                    // Redirect to thank you page
+                $response = $stk->initiateIncomingPayment([
+                    'paymentChannel' => 'M-PESA STK Push',
+                    'tillNumber' => $this->paytill,
+                    'firstName' => $customer_order->get_billing_first_name(),
+                    'lastName' => $customer_order->get_billing_last_name(),
+                    'phoneNumber' => $mpesa_phone,
+                    'amount' =>  $customer_order->get_total(),
+                    'currency' => 'KES',
+                    'email' =>$customer_order->get_billing_email(),
+                    'callbackUrl' => $this->callback_url,
+                    'accessToken' => $this->generate_access_token(),
+                ]);
+                if($response['status'] == 'success')
+                {
+                    $customer_order->add_order_note( __( 'Opikash offline Payment - Awaiting confirmation.', 'woocommerce' ) );
+                    // Mark as on-hold
+                    $customer_order->update_status('on-hold', __( 'Opikash offline Payment - Awaiting confirmation.', 'woocommerce' ));
                     return array(
                         'result'   => 'success',
                         'redirect' => $this->get_return_url( $customer_order ),
                     );
+                    // Payment has been successful
+//                    $customer_order->add_order_note( __( 'Opikash.co.ke payment completed.', 'woocommerce' ) );
+//
+//                    // Mark order as Paid
+//                    $customer_order->payment_complete();
+//
+//                    // Reduce stock levels
+//                    $customer_order->reduce_order_stock();
+//
+//                    // Empty the cart (Very important step)
+//                    $woocommerce->cart->empty_cart();
+//
+//                    // Redirect to thank you page
+//                    return array(
+//                        'result'   => 'success',
+//                        'redirect' => $this->get_return_url( $customer_order ),
+//                    );
+
                 }
-                if ($info['http_code'] === 200) {
-                    // Store the transaction ID in the order's postmeta
-                    if ( empty( $response['body'] ) )
-                        throw new Exception( __( 'Opikash\'s Response was empty.', 'woocommerce' ) );
-
-                    if (  $response['body'] == "no_account" )
-                        throw new Exception( __( 'Make sure you are using Opikash\'s API Username and API Transaction Key. Paybill/Till Number field is also required. Go to <a href="https://developer.Opikash.co.ke" target="_blank">Opikash.co.ke Developer</a> to copy these credentials.', 'woocommerce' ) );
-
-                    if ( $response['body'] == "used_trans" )
-                        throw new Exception( __( 'Sorry, the Transaction ID you are trying to use has already been used. Please check and try again.', 'woocommerce' ) );
-
-                    if ( is_numeric($response['body']) )
-                        throw new Exception( __( 'We have detected that you have made payment less <b>Ksh'.$response['body'].'</b>. Kindly pay the balance before we can accept your order. Please make sure you have paid the balance of exactly <b>Ksh'.$response['body'].'</b> to avoid any further delays. Thank you.', 'woocommerce' ) );
-
-                    if ( $response['body'] == "no_trans" )
-                        throw new Exception( __( 'Sorry, we could not verify your payment. Please check your Phone and enter your M-Pesa Pin to complete payment.', 'woocommerce' ) );
-
-                    if ( $response['body'] == "stk_fail" )
-                        throw new Exception( __( 'Sorry, we are unable to initiate payment at this time, please try again later.', 'woocommerce' ) );
-                    if ( $response['body'] == "phone_err" )
-                        throw new Exception( __( 'Please enter a valid phone number.', 'woocommerce' ) );
-
-                    // Retrieve the body's resopnse if no errors found
-
-                    if ( ( $response['body'] == "offline") ){
-
-                        $customer_order->add_order_note( __( 'Opikash offline Payment - Awaiting confirmation.', 'woocommerce' ) );
-
-                        // Mark as on-hold
-                        $customer_order->update_status('on-hold', __( 'Opikash offline Payment - Awaiting confirmation.', 'woocommerce' ));
-
-                        // Reduce stock levels
-                        $customer_order->reduce_order_stock();
-
-                        // Empty the cart
-                        $woocommerce->cart->empty_cart();
-
-                        // Redirect to thank you page
-                        return array(
-                            'result'   => 'success',
-                            'redirect' => $this->get_return_url( $customer_order ),
-                        );
-                    } else {
-                        // Transaction was not successful
-                        // Add notice to the cart
-                        wc_add_notice( $response['response_reason_text'], 'error' );
-                        // Add note to the order for your reference
-                        $customer_order->add_order_note( 'Error: '. $response['response_reason_text'] );
+                else {
+                    wc_add_notice( __('Payment error:', 'woothemes') . 'Sorry, we could not process your order at this time.'.$response['status'], 'error' );
+                }
+            }
+            /**
+             * @return void
+             */
+            public function verify_payment(): void
+            {
+                try{
+                    $order_id=$_SESSION['order_id'];
+                    $request=json_decode(file_get_contents('php://input'), true);
+                    //
+                    error_log(print_r("***********************************Callback Returned", true));
+                    error_log(print_r($request, true));
+                    error_log(print_r("Callback Returned***********************************", true));
+//                    $res = $this->complete_order_request($request);
+                    $order = wc_get_order( $order_id );
+                    $redirect_url = $this->get_return_url( $order );
+                    $res=[
+                        'status'=>true,
+                        'detail'=>''
+                    ];
+                    //complete order request
+                    if ($res['status']) {
+                        //redirect
+                        header("Location: ".$redirect_url);
                     }
-                } else {
-                    $user_response=json_decode($response);
-                    throw new Exception( __( $user_response->error_message.'-Error Code:-'.$user_response->error_code, 'woocommerce' ) );
+                    else{
+                        wp_die( "SasaPay IPN Request Failure. ".$res['detail'] );
+                    }
+                    die();
+                } catch (Exception $exception) {
+                    wp_die( "SasaPay IPN Request Failure" );
                 }
+            }
+            /**
+             * @param $transaction
+             * @return void
+             */
+            public function record_transaction($transaction): void
+            {
+                global $wpdb;
+                $charset_collate = $wpdb->get_charset_collate();
+                $order_id=$_SESSION['order_id'];
+
+                $table = $wpdb->prefix.'kopokopo_transactions';
+                $create_ddl="CREATE TABLE $table  (
+            id mediumint(9) NOT NULL AUTO_INCREMENT,
+            OrderID varchar(150) DEFAULT '' NULL,
+            CustomerMobile varchar(150) DEFAULT '' NULL,
+            TransactionDate datetime DEFAULT '0000-00-00 00:00:00' NOT NULL,
+            MerchantRequestID varchar(150) DEFAULT '' NULL,
+            CheckoutRequestID varchar(150) DEFAULT '' NULL,
+            ResultCode varchar(150) DEFAULT '' NULL,
+            ResultDesc varchar(150) DEFAULT '' NULL,
+            TransAmount varchar(100) NULL,
+            BillRefNumber varchar(100) NULL,
+            PRIMARY KEY  (id)
+	    ) $charset_collate;";
+
+                $data=[
+                    "OrderID"           =>$order_id,
+                    "MerchantRequestID" =>$transaction['MerchantRequestID'],
+                    "CheckoutRequestID" =>$transaction['CheckoutRequestID'],
+                    "ResultCode"        => $transaction['ResultCode'],
+                    "ResultDesc"        =>$transaction['ResultDesc'],
+                    "TransAmount"       =>$transaction['TransAmount'],
+                    "BillRefNumber"     =>$transaction['BillRefNumber'] ,
+                    "TransactionDate"   =>$transaction['TransactionDate'],
+                    "CustomerMobile"    =>$transaction['CustomerMobile']
+                ];
+
+                maybe_create_table( $table, $create_ddl );
+                $format = array('%s','%d');
+                $wpdb->insert($table,$data,$format);
+                //complete order
+                $order = wc_get_order( $order_id );
+                $order->update_status( 'completed' );
+                $order->reduce_order_stock();
+                WC()->cart->empty_cart();
             }
 
         }
