@@ -56,6 +56,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
 
                 $this->client_id   = $this->settings['client_id'];
                 $this->client_secret	= $this->settings['client_secret'];
+                $this->api_key	= $this->settings['api_key'];
                 $this->opa   			= $this->settings['opa'];
                 $this->is_production= $this->settings['is_production'];
                 $this->liveurl            = $this->settings['live_url'];
@@ -64,7 +65,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
 
                 // Hooks
                 add_action( 'woocommerce_update_options_payment_gateways_' . $this->id, array( &$this, 'process_admin_options' ) );
-                add_action( 'woocommerce_api_verify_payment', array( $this, 'verify_payment' ) );
+                add_action( 'woocommerce_api_opikash_kopokopo_gateway', array( $this, 'verify_payment' ) );
             }
 
             function init_form_fields() {
@@ -142,6 +143,13 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                         'title'       => __( 'KopoKopo Client Secret', 'woocommerce' ),
                         'type'        => 'password',
                         'description' => sprintf( __( 'Get your client secret from KopoKopo <a href="%s" target="_blank">KopoKopo</a>', 'woocommerce' ), 'https://app.kopokopo.com/' ),
+                        'default'     => '',
+                        'placeholder' => ''
+                    ),
+                    'api_key' => array(
+                        'title'       => __( 'KopoKopo API KEY', 'woocommerce' ),
+                        'type'        => 'password',
+                        'description' => sprintf( __( 'Get your API KEY from KopoKopo <a href="%s" target="_blank">KopoKopo</a>', 'woocommerce' ), 'https://app.kopokopo.com/' ),
                         'default'     => '',
                         'placeholder' => ''
                     ),
@@ -284,12 +292,11 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 $environment_url =$this->is_production=='yes' ?  $this->liveurl : $this->sandboxURL;
 
                 $mpesa_phone    = isset($_POST['mpesa_phone']) ? ($_POST['mpesa_phone']) : '';
-                $mpesa_code    = isset($_POST['mpesa_code']) ? ($_POST['mpesa_code']) : '';
 
                 $options = [
-                    'clientId' => $this->client_id,
-                    'clientSecret' => $this->client_secret,
-                    'apiKey' => '',
+                    'clientId' => $this->client_id ?? "bn8tziPMjPg9Xp4RbTDUFxVNw_oQa3qI2dRnQOnGWic",
+                    'clientSecret' => $this->client_secret ?? "EhYTgC-LTAJbViVIiRu2cc91J53biHDJzOBlKkX1Apk",
+                    'apiKey' => $this->api_key,
                     'baseUrl' => $environment_url,
                 ];
                 $K2 = new K2($options);
@@ -301,8 +308,8 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     'tillNumber' => $this->paytill,
                     'firstName' => $customer_order->get_billing_first_name(),
                     'lastName' => $customer_order->get_billing_last_name(),
-                    'phoneNumber' => $mpesa_phone,
-                    'amount' =>  $customer_order->get_total(),
+                    'phoneNumber' => $this->getMsisdn($mpesa_phone),
+                    'amount' =>  round($customer_order->get_total()),
                     'currency' => 'KES',
                     'email' =>$customer_order->get_billing_email(),
                     'callbackUrl' => $this->callback_url,
@@ -337,39 +344,58 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
 
                 }
                 else {
-                    wc_add_notice( __('Payment error:', 'woothemes') . 'Sorry, we could not process your order at this time.'.$response['status'], 'error' );
+                    wc_add_notice( __('Payment Failed:', 'woothemes') . ' Sorry, we could not process your order at this time. '.$response['status'], 'error' );
                 }
+            }
+
+            /**
+             * @param string $number
+             * @return string
+             */
+            public function getMsisdn(string $number): string
+            {
+                $number = trim($number);
+                $number = str_replace(' ', '', $number);
+                $number = str_replace('+', '', $number);
+
+                if (substr($number, 0, 3) === '254'){
+
+                    if (substr($number, 0, 4) === '2540')
+                        $number = substr_replace($number, '', 3, 1);
+
+                    return $number;
+                }
+
+                $number = $number[0] === '0' ? ltrim($number, 0) : $number;
+                return '+254'.$number;
             }
             /**
              * @return void
              */
             public function verify_payment(): void
             {
-                try{
-                    $order_id=$_SESSION['order_id'];
-                    $request=json_decode(file_get_contents('php://input'), true);
+                $order_id=$_SESSION['order_id'];
+                $response=json_decode(file_get_contents('php://input'), true);
+                //
+                $data=$response->data->attributes;
+                if (strtolower($data->status) == 'success')
+                {
+                    $this->record_transaction($data->event->resource);
                     //
-                    error_log(print_r("***********************************Callback Returned", true));
-                    error_log(print_r($request, true));
-                    error_log(print_r("Callback Returned***********************************", true));
-//                    $res = $this->complete_order_request($request);
+                    //complete order
                     $order = wc_get_order( $order_id );
-                    $redirect_url = $this->get_return_url( $order );
-                    $res=[
-                        'status'=>true,
-                        'detail'=>''
-                    ];
-                    //complete order request
-                    if ($res['status']) {
-                        //redirect
-                        header("Location: ".$redirect_url);
-                    }
-                    else{
-                        wp_die( "SasaPay IPN Request Failure. ".$res['detail'] );
-                    }
-                    die();
-                } catch (Exception $exception) {
-                    wp_die( "SasaPay IPN Request Failure" );
+                    $order->update_status( 'completed' );
+                    $order->reduce_order_stock();
+                    WC()->cart->empty_cart();
+                    //
+                    $order = wc_get_order( $order_id );
+                    $order->payment_complete();
+                    $order->update_status('completed', __( 'Opikash payment completed.', 'woocommerce' ));
+                }
+                else
+                {
+                    $order = wc_get_order( $order_id );
+                    $order->update_status('failed', __( 'Opikash payment failed.', 'woocommerce' ));
                 }
             }
             /**
@@ -381,42 +407,44 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 global $wpdb;
                 $charset_collate = $wpdb->get_charset_collate();
                 $order_id=$_SESSION['order_id'];
+                //
 
                 $table = $wpdb->prefix.'kopokopo_transactions';
                 $create_ddl="CREATE TABLE $table  (
-            id mediumint(9) NOT NULL AUTO_INCREMENT,
-            OrderID varchar(150) DEFAULT '' NULL,
-            CustomerMobile varchar(150) DEFAULT '' NULL,
-            TransactionDate datetime DEFAULT '0000-00-00 00:00:00' NOT NULL,
-            MerchantRequestID varchar(150) DEFAULT '' NULL,
-            CheckoutRequestID varchar(150) DEFAULT '' NULL,
-            ResultCode varchar(150) DEFAULT '' NULL,
-            ResultDesc varchar(150) DEFAULT '' NULL,
-            TransAmount varchar(100) NULL,
-            BillRefNumber varchar(100) NULL,
-            PRIMARY KEY  (id)
+                        id mediumint(9) NOT NULL AUTO_INCREMENT,
+                        order_id varchar(150) DEFAULT '' NULL,
+                        sender_phone_number varchar(150) DEFAULT '' NULL,
+                        origination_time datetime DEFAULT '0000-00-00 00:00:00' NOT NULL,
+                        sender_first_name varchar(150) DEFAULT '' NULL,
+                        sender_middle_name varchar(150) DEFAULT '' NULL,
+                        sender_last_name varchar(150) DEFAULT '' NULL,
+                        till_number varchar(150) DEFAULT '' NULL,
+                        reference varchar(150) DEFAULT '' NULL,
+                        currency varchar(150) DEFAULT '' NULL,
+                        amount varchar(100) NULL,
+                        system varchar(100) NULL,
+                        status varchar(100) NULL,
+                        PRIMARY KEY  (id)
 	    ) $charset_collate;";
 
                 $data=[
-                    "OrderID"           =>$order_id,
-                    "MerchantRequestID" =>$transaction['MerchantRequestID'],
-                    "CheckoutRequestID" =>$transaction['CheckoutRequestID'],
-                    "ResultCode"        => $transaction['ResultCode'],
-                    "ResultDesc"        =>$transaction['ResultDesc'],
-                    "TransAmount"       =>$transaction['TransAmount'],
-                    "BillRefNumber"     =>$transaction['BillRefNumber'] ,
-                    "TransactionDate"   =>$transaction['TransactionDate'],
-                    "CustomerMobile"    =>$transaction['CustomerMobile']
+                    "order_id"           =>$order_id,
+                    "sender_phone_number" =>$transaction['sender_phone_number'],
+                    "origination_time" =>$transaction['origination_time'],
+                    "sender_first_name"        => $transaction['sender_first_name'],
+                    "sender_middle_name"        =>$transaction['sender_middle_name'],
+                    "sender_last_name"       =>$transaction['sender_last_name'],
+                    "till_number"     =>$transaction['till_number'] ,
+                    "reference"   =>$transaction['reference'],
+                    "currency"    =>$transaction['currency'],
+                    "amount"    =>$transaction['amount'],
+                    "system"    =>$transaction['system'],
+                    "status"    =>$transaction['status'],
                 ];
 
                 maybe_create_table( $table, $create_ddl );
                 $format = array('%s','%d');
                 $wpdb->insert($table,$data,$format);
-                //complete order
-                $order = wc_get_order( $order_id );
-                $order->update_status( 'completed' );
-                $order->reduce_order_stock();
-                WC()->cart->empty_cart();
             }
 
         }
