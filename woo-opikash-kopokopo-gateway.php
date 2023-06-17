@@ -99,7 +99,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                         'title'       => __( 'Enable/Disable SMS', 'woocommerce' ),
                         'label'       => __( 'Enable SMS notification', 'woocommerce' ),
                         'type'        => 'checkbox',
-                        'description' => __( 'Receive/Send SMS with your own sender ID. Contact info@paytalk.co.ke to setup your SMS account.', 'woocommerce' ),
+                        'description' => __( 'Receive/Send SMS with your own sender ID. Contact info@millerjuma.co.ke to setup your SMS account.', 'woocommerce' ),
                         'default'     => 'no',
                         //'desc_tip'    => true
                     ),
@@ -128,7 +128,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                         'title'       => __( 'Description', 'woocommerce' ),
                         'type'        => 'textarea',
                         'description' => __( 'This controls the description which the user sees during checkout.', 'woocommerce' ),
-                        'default'     => 'Pay with Till Number/Paybill via PayTalk.',
+                        'default'     => 'Pay with Till Number.',
                         'desc_tip'    => true
                     ),
 
@@ -151,7 +151,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                         'type'        => 'password',
                         'description' => sprintf( __( 'Get your API KEY from KopoKopo <a href="%s" target="_blank">KopoKopo</a>', 'woocommerce' ), 'https://app.kopokopo.com/' ),
                         'default'     => '',
-                        'placeholder' => ''
+                        'placeholder' => 'Optional'
                     ),
 
                     'opa' => array(
@@ -324,24 +324,6 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                         'result'   => 'success',
                         'redirect' => $this->get_return_url( $customer_order ),
                     );
-                    // Payment has been successful
-//                    $customer_order->add_order_note( __( 'Opikash.co.ke payment completed.', 'woocommerce' ) );
-//
-//                    // Mark order as Paid
-//                    $customer_order->payment_complete();
-//
-//                    // Reduce stock levels
-//                    $customer_order->reduce_order_stock();
-//
-//                    // Empty the cart (Very important step)
-//                    $woocommerce->cart->empty_cart();
-//
-//                    // Redirect to thank you page
-//                    return array(
-//                        'result'   => 'success',
-//                        'redirect' => $this->get_return_url( $customer_order ),
-//                    );
-
                 }
                 else {
                     wc_add_notice( __('Payment Failed:', 'woothemes') . ' Sorry, we could not process your order at this time. '.$response['status'], 'error' );
@@ -391,6 +373,13 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     $order = wc_get_order( $order_id );
                     $order->payment_complete();
                     $order->update_status('completed', __( 'Opikash payment completed.', 'woocommerce' ));
+                    //
+                    $order->add_order_note(
+                        sprintf(
+                            __( 'Opikash payment completed with Transaction ID %s', 'woocommerce' ),
+                            $data->event->resource->id
+                        )
+                    );
                 }
                 else
                 {
