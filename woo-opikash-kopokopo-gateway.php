@@ -6,6 +6,19 @@ use \Kopokopo\SDK\K2;
 if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly
 }
+require_once (ABSPATH . 'wp-admin/includes/upgrade.php');
+//session
+if (!function_exists('wc_opikash_kopokopo_session')) {
+    function wc_opikash_kopokopo_session()
+    {
+        if (!session_id()) {
+            error_log("***************************");
+            error_log("session started");
+            error_log("***************************");
+            session_start();
+        }
+    }
+}
 /**
  * @package Opikash Kopokopo Woocommerce
  */
@@ -65,7 +78,9 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
 
                 // Hooks
                 add_action( 'woocommerce_update_options_payment_gateways_' . $this->id, array( &$this, 'process_admin_options' ) );
-                add_action( 'woocommerce_api_opikash_kopokopo_gateway', array( $this, 'verify_payment' ) );
+                // Initialize the session
+                add_action('init', 'wc_opikash_kopokopo_session');
+                add_action( 'woocommerce_api_verify_payment', array( $this, 'verify_payment' ) );
             }
 
             function init_form_fields() {
@@ -284,11 +299,13 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
              * @return array|void
              */
             public function process_payment( $order_id ) {
-                global $woocommerce;
                 // Get this Order's information so that we know
                 // who to charge and how much
                 $customer_order = new WC_Order( $order_id );
-                //get order id
+                //set order id to session
+                wc_opikash_kopokopo_session();
+                $_SESSION['order_awaiting_payment'] = $order_id;
+                //get access token
                 $environment_url =$this->is_production=='yes' ?  $this->liveurl : $this->sandboxURL;
 
                 $mpesa_phone    = isset($_POST['mpesa_phone']) ? ($_POST['mpesa_phone']) : '';
@@ -317,6 +334,11 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 ]);
                 if($response['status'] == 'success')
                 {
+                    //record session
+                    $this->record_session_to_db([
+                        'order_id' => $order_id,
+                        'phone_number' => $this->getMsisdn($mpesa_phone),
+                    ]);
                     $customer_order->add_order_note( __( 'Opikash offline Payment - Awaiting confirmation.', 'woocommerce' ) );
                     // Mark as on-hold
                     $customer_order->update_status('on-hold', __( 'Opikash offline Payment - Awaiting confirmation.', 'woocommerce' ));
@@ -356,18 +378,23 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
              */
             public function verify_payment(): void
             {
-                $order_id=$_SESSION['order_id'];
                 $response=json_decode(file_get_contents('php://input'), true);
-                //
-                $data=$response->data->attributes;
-                if (strtolower($data->status) == 'success')
+                //log
+                $data=$response['data']['attributes'];
+                $record=$data['event']['resource'];
+                //get session
+                $session=$this->get_session_from_db($record['sender_phone_number']);
+                //orderId
+                $order_id = $session['order_id'];
+                //check if order is paid
+                if ($data['status'] == 'Success')
                 {
-                    $this->record_transaction($data->event->resource);
-                    //
+                    $this->record_transaction($record, $order_id);
                     //complete order
                     $order = wc_get_order( $order_id );
+
                     $order->update_status( 'completed' );
-                    $order->reduce_order_stock();
+                    wc_reduce_stock_levels( $order_id );
                     WC()->cart->empty_cart();
                     //
                     $order = wc_get_order( $order_id );
@@ -377,7 +404,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     $order->add_order_note(
                         sprintf(
                             __( 'Opikash payment completed with Transaction ID %s', 'woocommerce' ),
-                            $data->event->resource->id
+                            $data['event']['resource']['id']
                         )
                     );
                 }
@@ -386,21 +413,25 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     $order = wc_get_order( $order_id );
                     $order->update_status('failed', __( 'Opikash payment failed.', 'woocommerce' ));
                 }
+                //remove session
+                $this->remove_session_from_db($record['sender_phone_number']);
             }
             /**
              * @param $transaction
              * @return void
              */
-            public function record_transaction($transaction): void
+            public function record_transaction($transaction,$order_id): void
             {
                 global $wpdb;
                 $charset_collate = $wpdb->get_charset_collate();
-                $order_id=$_SESSION['order_id'];
-                //
+                //get order id from url params
+                global $woocommerce;
 
-                $table = $wpdb->prefix.'kopokopo_transactions';
+                // Retrieve the value of the session variable or fallback to $_GET value
+                $table = $wpdb->prefix.'opikash_kopokopo_transactions';
                 $create_ddl="CREATE TABLE $table  (
                         id mediumint(9) NOT NULL AUTO_INCREMENT,
+                        transaction_id varchar(150) DEFAULT '' NULL,
                         order_id varchar(150) DEFAULT '' NULL,
                         sender_phone_number varchar(150) DEFAULT '' NULL,
                         origination_time datetime DEFAULT '0000-00-00 00:00:00' NOT NULL,
@@ -410,14 +441,15 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                         till_number varchar(150) DEFAULT '' NULL,
                         reference varchar(150) DEFAULT '' NULL,
                         currency varchar(150) DEFAULT '' NULL,
-                        amount varchar(100) NULL,
-                        system varchar(100) NULL,
-                        status varchar(100) NULL,
+                        amount varchar(100) DEFAULT 0 NULL,
+                        system_name varchar(100) DEFAULT '' NULL,
+                        status varchar(100) DEFAULT '' NULL,
                         PRIMARY KEY  (id)
 	    ) $charset_collate;";
 
                 $data=[
                     "order_id"           =>$order_id,
+                    "transaction_id"           =>$transaction['id'],
                     "sender_phone_number" =>$transaction['sender_phone_number'],
                     "origination_time" =>$transaction['origination_time'],
                     "sender_first_name"        => $transaction['sender_first_name'],
@@ -427,15 +459,63 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     "reference"   =>$transaction['reference'],
                     "currency"    =>$transaction['currency'],
                     "amount"    =>$transaction['amount'],
-                    "system"    =>$transaction['system'],
+                    "system_name"    =>$transaction['system'],
                     "status"    =>$transaction['status'],
                 ];
-
                 maybe_create_table( $table, $create_ddl );
                 $format = array('%s','%d');
                 $wpdb->insert($table,$data,$format);
             }
 
+            /**
+             * @param $data
+             * @return void
+             */
+            public function record_session_to_db($data): void
+            {
+                global $wpdb;
+                $charset_collate = $wpdb->get_charset_collate();
+                $table = $wpdb->prefix.'opikash_kopokopo_sessions';
+                $create_ddl="CREATE TABLE $table  (
+                        id mediumint(9) NOT NULL AUTO_INCREMENT,
+                        phone_number varchar(150) DEFAULT '' NULL,
+                        order_id varchar(150) DEFAULT '' NULL,
+                        created_at datetime DEFAULT '0000-00-00 00:00:00' NOT NULL,
+                        PRIMARY KEY  (id)
+                ) $charset_collate;";
+
+                $data=[
+                    "phone_number"           =>$data['phone_number'],
+                    "order_id"           =>$data['order_id'],
+                    'created_at' => date('Y-m-d H:i:s'),
+                ];
+                maybe_create_table( $table, $create_ddl );
+                $format = array('%s','%d');
+                $wpdb->insert($table,$data,$format);
+            }
+
+            /**
+             * @param $phone_number
+             * @return array
+             */
+            public function get_session_from_db($phone_number): array
+            {
+                global $wpdb;
+                $table = $wpdb->prefix . 'opikash_kopokopo_sessions';
+                $sql = $wpdb->prepare("SELECT * FROM $table WHERE phone_number = %s ORDER BY created_at DESC LIMIT 1", $phone_number);
+                return $wpdb->get_row($sql, ARRAY_A);
+            }
+            /**
+             * @param $phone_number
+             * @return void
+             */
+            public function remove_session_from_db($phone_number): void
+            {
+                global $wpdb;
+                $table = $wpdb->prefix.'opikash_kopokopo_sessions';
+                $sql="DELETE FROM $table WHERE phone_number=$phone_number";
+                $wpdb->query($sql);
+            }
         }
 
         function add_init_kopokopo_opikash_class($methods) {
