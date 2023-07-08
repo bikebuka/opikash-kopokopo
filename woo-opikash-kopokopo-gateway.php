@@ -393,17 +393,17 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     //complete order
                     $order = wc_get_order( $order_id );
 
-                    $order->update_status( 'completed' );
+                    $order->update_status( 'processing' );
                     wc_reduce_stock_levels( $order_id );
                     WC()->cart->empty_cart();
                     //
                     $order = wc_get_order( $order_id );
                     $order->payment_complete();
-                    $order->update_status('completed', __( 'Opikash payment completed.', 'woocommerce' ));
+                    $order->update_status('processing', __( 'Opikash payment processing.', 'woocommerce' ));
                     //
                     $order->add_order_note(
                         sprintf(
-                            __( 'Opikash payment completed with Transaction ID %s', 'woocommerce' ),
+                            __( 'Opikash payment processing with Transaction ID %s', 'woocommerce' ),
                             $data['event']['resource']['id']
                         )
                     );
