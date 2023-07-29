@@ -311,8 +311,8 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 $mpesa_phone    = isset($_POST['mpesa_phone']) ? ($_POST['mpesa_phone']) : '';
 
                 $options = [
-                    'clientId' => $this->client_id ?? "bn8tziPMjPg9Xp4RbTDUFxVNw_oQa3qI2dRnQOnGWic",
-                    'clientSecret' => $this->client_secret ?? "EhYTgC-LTAJbViVIiRu2cc91J53biHDJzOBlKkX1Apk",
+                    'clientId' => $this->client_id,
+                    'clientSecret' => $this->client_secret,
                     'apiKey' => $this->api_key,
                     'baseUrl' => $environment_url,
                 ];
